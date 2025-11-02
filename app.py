@@ -13,7 +13,7 @@ app = Flask(__name__, template_folder='.')
 
 
 # --- CONFIGURATION ---
-KNOWN_CATEGORIES = ['auto repair', 'restaurant', 'cafe', 'bookstore', 'hardware store', 'electronics']
+KNOWN_CATEGORIES = ['auto repair', 'restaurant', 'cafe', 'bookstore', 'hardware store', 'electronics', 'supermarket']
 MODEL_CACHE_PATH = "./chroma_data/models"
 
 # --- HELPER FUNCTION ---
@@ -26,15 +26,29 @@ def find_category_in_query(query_text):
     return None
 
 # --- CHROMA DB SETUP (Runs once on startup) ---
-print(f"Loading embedding model (cache: {MODEL_CACHE_PATH})...")
+print(f"Loading embedding model (cache: {MODEL_CACHE_PATH})..."); sys.stdout.flush()
 embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2",
     cache_folder=MODEL_CACHE_PATH 
 )
 
-print("Initializing persistent Chroma client...")
+print("Initializing persistent Chroma client..."); sys.stdout.flush()
 chroma_client = chromadb.PersistentClient(path="./chroma_data")
-collection = chroma_client.get_or_create_collection("businesses", embedding_function=embed_fn)
+
+# --- THIS IS THE FIX ---
+# We will delete and recreate the collection on every startup
+# to ensure the data in the DB matches the 'businesses' list.
+try:
+    print("Deleting existing 'businesses' collection to refresh data..."); sys.stdout.flush()
+    chroma_client.delete_collection("businesses")
+except Exception as e:
+    print(f"Note: Collection 'businesses' did not exist or could not be deleted (this is normal on first run): {e}"); sys.stdout.flush()
+
+# Create a new, fresh collection
+print("Creating new 'businesses' collection..."); sys.stdout.flush()
+collection = chroma_client.create_collection("businesses", embedding_function=embed_fn)
+# --- END OF FIX ---
+
 
 # 4. Example business entries
 businesses = [
@@ -126,7 +140,7 @@ businesses = [
         "address": "600 Financial Plaza",
         "type": "electronics",
         "phone": "555-3233",
-        "hours": "9am–7pm"
+        "hours": "7am–7pm"
     },
 	{
         "id": "11",
@@ -136,11 +150,29 @@ businesses = [
         "type": "electronics",
         "phone": "555-4356",
         "hours": "9am–5pm"
+    },
+	{
+        "id": "12",
+        "name": "ICA Maxi",
+        "desc": "Large supermarket selling food and groceries. Open late.",
+        "address": "145 Frolunda",
+        "type": "supermarket",
+        "phone": "555-4356",
+        "hours": "6am–11pm"
+    },
+	{
+        "id": "13",
+        "name": "Willys Local",
+        "desc": "Local supermarket selling food and groceries",
+        "address": "167 Local Street",
+        "type": "supermarket",
+        "phone": "555-7425",
+        "hours": "9am–5pm"
     }
 ]
 
 # 5. Add to collection
-print("Syncing documents to collection...")
+print("Syncing documents to collection..."); sys.stdout.flush()
 rich_documents = [
     f"Name: {b['name']}. Type: {b['type']}. Description: {b['desc']}"
     for b in businesses
@@ -159,7 +191,7 @@ collection.add(
         "hours": b["hours"]
     } for b in businesses]
 )
-print(f"Collection is ready with {collection.count()} items.")
+print(f"Collection is ready with {collection.count()} items."); sys.stdout.flush()
 
 
 # --- NEW GEMINI API FUNCTION ---
@@ -171,23 +203,24 @@ def call_gemini_api(query, context):
     
     # --- CHANGE 2: Add error handling if key is missing ---
     if not apiKey:
-        print("Error: GEMINI_API_KEY environment variable not set.")
+        print("Error: GEMINI_API_KEY environment variable not set."); sys.stdout.flush()
         return ("Error: The server is not configured with an API key. "
                 "Please set the GEMINI_API_KEY environment variable.")
     
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={apiKey}"
     
-    # --- UPDATED SYSTEM PROMPT ---
-    # Give the model permission to make common-sense connections.
+    # --- THIS IS THE FIX: A much better system prompt ---
     system_prompt = (
-        "You are a helpful local assistant. Based on the provided context "
-        "of local businesses, answer the user's question. "
-        "It is OK to make common-sense inferences (e.g., 'car repair' or 'auto shop' "
-        "can help a user 'fix their car'). "
+        "You are a helpful local assistant. Your goal is to give a complete and helpful answer "
+        "to the user's question, based *only* on the provided context. "
+        "When you find a matching business, please provide a helpful summary that includes "
+        "its **name, what it does (in relation to the user's query), its address, and phone number.** "
+        "It is OK to make common-sense inferences (e.g., a 'hardware store' that 'sells paint' is the "
+        "right place for someone who 'needs to paint their house'). "
         "If the provided context does not contain a relevant answer, "
         "simply state that you cannot find a relevant business in the provided information."
     )
-    # --- END OF UPDATE ---
+    # --- END OF FIX ---
     
     # Format the context for the model
     context_string = "\n".join(context)
@@ -200,6 +233,16 @@ def call_gemini_api(query, context):
         },
     }
     
+    # --- THIS IS THE FIX ---
+    # Log the full request being sent to Gemini
+    print("-" * 50); sys.stdout.flush()
+    print("SENDING REQUEST TO GEMINI:"); sys.stdout.flush()
+    print(f"System Prompt: {system_prompt}"); sys.stdout.flush()
+    print(f"User Prompt (with context): {prompt}"); sys.stdout.flush()
+    # print(f"Payload (for debugging): {json.dumps(payload, indent=2)}") # Uncomment this line for full payload details
+    print("-" * 50); sys.stdout.flush()
+    # --- END OF FIX ---
+
     try:
         response = requests.post(
             apiUrl, 
@@ -211,7 +254,7 @@ def call_gemini_api(query, context):
         result = response.json()
         
         # --- Add logging to see the full API response ---
-        print(f"Gemini API Response: {json.dumps(result, indent=2)}")
+        print(f"Gemini API Response: {json.dumps(result, indent=2)}"); sys.stdout.flush()
 
         # --- Safely check for 'candidates' ---
         if 'candidates' in result and result['candidates']:
@@ -219,21 +262,22 @@ def call_gemini_api(query, context):
             if candidate.get('content') and candidate['content']['parts'][0].get('text'):
                 return candidate['content']['parts'][0]['text']
             else:
-                print("Error: Could not parse Gemini response content.")
+                print("Error: Could not parse Gemini response content."); sys.stdout.flush()
                 return "Error: Could not parse Gemini response content."
         
         # --- Handle API error messages gracefully ---
         elif 'error' in result:
             error_message = result['error'].get('message', 'Unknown API error')
-            print(f"Gemini API Error: {error_message}")
+# ... existingM code ...
+            print(f"Gemini API Error: {error_message}"); sys.stdout.flush()
             return f"Error from AI: {error_message}"
         
         else:
-            print("Error: Unknown response structure from Gemini.")
+            print("Error: Unknown response structure from Gemini."); sys.stdout.flush()
             return "Error: Unknown response structure from Gemini."
 
     except Exception as e:
-        print(f"Error calling Gemini: {e}")
+        print(f"Error calling Gemini: {e}"); sys.stdout.flush()
         # Return the error message to the frontend
         return f"Error connecting to AI: {str(e)}" 
 
@@ -248,7 +292,7 @@ def home():
 @app.route('/api/all', methods=['GET'])
 def api_get_all():
     try:
-        print("Received request for /api/all")
+        print("Received request for /api/all"); sys.stdout.flush()
         all_items = collection.get(include=["metadatas", "documents"])
         
         formatted_results = []
@@ -263,7 +307,7 @@ def api_get_all():
         return jsonify({"results": formatted_results})
 
     except Exception as e:
-        print(f"\nAn error occurred in /api/all: {e}")
+        print(f"\nAn error occurred in /api/all: {e}"); sys.stdout.flush()
         return jsonify({"error": str(e)}), 500
 
 
@@ -275,7 +319,7 @@ def api_query():
         if not query:
             return jsonify({"error": "No query provided"}), 400
 
-        print(f"Received query: '{query}'")
+        print(f"Received query: '{query}'"); sys.stdout.flush()
 
         # --- Dynamic Query Logic ---
         detected_category = find_category_in_query(query)
@@ -290,9 +334,9 @@ def api_query():
         if detected_category:
             where_filter = {"type": detected_category} # Define it here
             query_args["where"] = where_filter
-            print(f"Querying with filter: {where_filter}")
+            print(f"Querying with filter: {where_filter}"); sys.stdout.flush()
         else:
-            print("Querying without category filter.")
+            print("Querying without category filter."); sys.stdout.flush()
         
         # 7. Query example
         results = collection.query(**query_args)
@@ -325,7 +369,7 @@ def api_query():
         # 9. --- NEW: Call Gemini API ---
         ai_summary = None
         if formatted_results: # Only call Gemini if we have results
-            print("Sending context to Gemini...")
+            print("Sending context to Gemini..."); sys.stdout.flush()
             # --- BUG FIX: Corrected function name ---
             ai_summary = call_gemini_api(query, context_for_gemini)
         
@@ -336,7 +380,7 @@ def api_query():
         })
 
     except Exception as e:
-        print(f"\nAn error occurred: {e}")
+        print(f"\nAn error occurred: {e}"); sys.stdout.flush()
         return jsonify({"error": str(e)}), 500
 
 # --- RUN THE APP ---
