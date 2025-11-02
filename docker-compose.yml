@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  app:
+    # Build the image from the Dockerfile in the current directory
+    build: .
+    # Name the image
+    image: chroma-test-app
+
+    # Expose port 5000 (Flask) to the host machine
+    ports:
+      - "5000:5000"
+    
+    # Mount volumes
+    volumes:
+      # Mount the persistent volume for ChromaDB data & models
+      - my-chroma-data:/app/chroma_data
+      # Mount the current directory to /app for live code reloading
+      - .:/app
+    env_file:
+      - .env
+
+    # Set the working directory inside the container
+    working_dir: /app
+
+# Define the named volume for persistent storage
+volumes:
+  my-chroma-data:

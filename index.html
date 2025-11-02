@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Business Search</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Simple spinner */
+        .loader {
+            border-top-color: #3498db;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased">
+
+    <div class="container mx-auto max-w-2xl p-4 sm:p-6 lg:p-8">
+        
+        <!-- Header -->
+        <header class="mb-6">
+            <h1 class="text-4xl font-bold text-gray-800 text-center">Business Finder</h1>
+            <p class="text-center text-gray-600 mt-2">Use semantic search to find local businesses.</p>
+        </header>
+
+        <!-- Search Form -->
+        <form id="search-form" class="mb-6">
+            <div class="flex flex-col sm:flex-row gap-2">
+                <input 
+                    type="text" 
+                    id="search-input" 
+                    placeholder="e.g., 'where can I buy tools' or 'cafe with wifi'"
+                    class="flex-grow p-3 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                <button 
+                    type="submit"
+                    class="bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition duration-150 ease-in-out"
+                >
+                    Search
+                </button>
+            </div>
+        </form>
+
+        <!-- "View All" Button -->
+        <div class="text-center mb-4">
+            <button 
+                id="view-all-btn"
+                class="text-sm text-blue-600 hover:text-blue-800 hover:underline focus:outline-none"
+            >
+                Or, view all entries in the database
+            </button>
+        </div>
+
+        <!-- Status Area: Spinner and Errors -->
+        <div id="status-area" class="text-center min-h-[40px] flex items-center justify-center">
+            <!-- Spinner (hidden by default) -->
+            <div id="loading-spinner" class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-10 w-10 mb-4" style="display: none;"></div>
+            
+            <!-- Error Message -->
+            <div id="error-message" class="text-red-600 font-semibold" style="display: none;"></div>
+        </div>
+
+        <!-- --- NEW: AI Summary Area --- -->
+        <div id="ai-summary-container" class="mb-6" style="display: none;">
+            <div class="bg-blue-50 border-l-4 border-blue-500 text-blue-900 p-4 rounded-lg shadow-sm">
+                <h3 class="font-bold text-lg mb-2">AI Summary</h3>
+                <div id="ai-summary-text" class="prose prose-sm max-w-none">
+                    <!-- AI summary will be injected here -->
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Results Area -->
+        <div id="results-container" class="space-y-4">
+            <!-- Results will be injected here by JavaScript -->
+        </div>
+
+    </div>
+
+    <script>
+        const searchForm = document.getElementById('search-form');
+        const searchInput = document.getElementById('search-input');
+        const resultsContainer = document.getElementById('results-container');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const errorMessage = document.getElementById('error-message');
+        const viewAllBtn = document.getElementById('view-all-btn');
+        const aiSummaryContainer = document.getElementById('ai-summary-container'); // <-- Get new elements
+        const aiSummaryText = document.getElementById('ai-summary-text');
+
+        searchForm.addEventListener('submit', async (e) => {
+            e.preventDefault(); // Prevent default form submission
+            const query = searchInput.value;
+
+            if (!query) return;
+
+            // --- Show loading state ---
+            loadingSpinner.style.display = 'block';
+            errorMessage.style.display = 'none';
+            resultsContainer.innerHTML = '';
+            aiSummaryContainer.style.display = 'none'; // <-- Hide AI summary
+
+            try {
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query: query }),
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'An unknown error occurred.');
+                }
+
+                const data = await response.json();
+                
+                // --- NEW: Render AI Summary ---
+                if (data.ai_summary) {
+                    // Simple text-to-HTML (replace newlines with <br>)
+                    aiSummaryText.innerHTML = data.ai_summary.replace(/\n/g, '<br>');
+                    aiSummaryContainer.style.display = 'block';
+                }
+                
+                renderResults(data.results);
+
+            } catch (error) {
+                console.error('Search failed:', error);
+                errorMessage.textContent = `Error: ${error.message}`;
+                errorMessage.style.display = 'block';
+            } finally {
+                // --- Hide loading state ---
+                loadingSpinner.style.display = 'none';
+            }
+        });
+
+        // --- Add this new event listener for the 'View All' button ---
+        viewAllBtn.addEventListener('click', async () => {
+            // --- Show loading state ---
+            loadingSpinner.style.display = 'block';
+            errorMessage.style.display = 'none';
+            resultsContainer.innerHTML = '';
+            aiSummaryContainer.style.display = 'none'; // <-- Hide AI summary
+            searchInput.value = ''; // Clear search bar
+
+            try {
+                const response = await fetch('/api/all', { method: 'GET' });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'An unknown error occurred.');
+                }
+
+                const data = await response.json();
+                renderResults(data.results); // Re-use the same render function
+
+            } catch (error) {
+                console.error('View all failed:', error);
+                errorMessage.textContent = `Error: ${error.message}`;
+                errorMessage.style.display = 'block';
+            } finally {
+                // --- Hide loading state ---
+                loadingSpinner.style.display = 'none';
+            }
+        });
+
+        function renderResults(results) {
+            if (results.length === 0) {
+                resultsContainer.innerHTML = '<p class="text-center text-gray-500">No results found.</p>';
+                return;
+            }
+
+            results.forEach(item => {
+                const card = `
+                    <div class="bg-white p-5 rounded-lg shadow-md border border-gray-200">
+                        <!-- Card Header -->
+                        <div class="flex justify-between items-center mb-2">
+                            <h2 class="text-2xl font-semibold text-blue-700">${item.name}</h2>
+                            <span class="bg-blue-100 text-blue-800 text-sm font-medium px-3 py-0.5 rounded-full">${item.type}</span>
+                        </div>
+                        
+                        <!-- Contact Info -->
+                        <div class="text-gray-700 mb-4">
+                            <p><strong>Address:</strong> ${item.address}</p>
+                            <p><strong>Phone:</strong> ${item.phone}</p>
+                            <p><strong>Hours:</strong> ${item.hours}</p>
+                        </div>
+                        
+                        <!-- Rich Document (for debugging) -->
+                        <div class_ ="mt-4 pt-4 border-t border-gray-200">
+                            <p class="text-xs text-gray-500 italic">
+                                <strong>Matched Text:</strong> ${item.rich_document}
+                            </p>
+                        </div>
+                    </div>
+                `;
+                resultsContainer.innerHTML += card;
+            });
+        }
+    </script>
+
+</body>
+</html>
+
+
+
